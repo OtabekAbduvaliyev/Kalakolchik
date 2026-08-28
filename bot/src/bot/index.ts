@@ -29,11 +29,21 @@ bot.command("start", startHandler);
 bot.command("stop", stopHandler);
 
 // --- Inline Keyboard Callback Handlers ---
+// All callback data values emitted by reminder flow keyboards must be listed here.
+// grammY silently drops callbacks not matching any registered filter.
 bot.callbackQuery(
   [
+    // Reminder type selection (old flow + voice flow)
     "type_onetime", "type_cycle",
+    // One-time quick date selection (old flow)
     "remind_1d", "remind_3d", "remind_5d", "remind_custom",
-    "voice_confirm", "voice_edit",
+    // Preview confirmation (voice flow)
+    "voice_confirm", "voice_edit", "voice_cancel",
+    // Time picker keyboard
+    "time_08:00", "time_13:00", "time_18:00", "time_20:00", "time_21:00", "time_custom",
+    // Edit field selection keyboard
+    "edit_field_action", "edit_field_date", "edit_field_time",
+    "edit_field_frequency", "edit_field_end", "edit_field_back",
   ],
   scheduleCallbackHandler
 );
@@ -45,8 +55,8 @@ bot.callbackQuery(/^stop_/, stopCycleCallbackHandler);
 // Must be registered BEFORE the generic text/media handler
 bot.on("message:voice", voiceHandler);
 
-// --- Message Handler (Text / Photo / Video) ---
-bot.on(["message:text", "message:photo", "message:video"], async (ctx) => {
+// --- Message Handler (Text / Photo / Video / Document / Audio) ---
+bot.on(["message:text", "message:photo", "message:video", "message:document", "message:audio"], async (ctx) => {
   const text = ctx.message?.text;
 
   // 1. Skip commands

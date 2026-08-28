@@ -19,5 +19,5 @@ async function startHandler(ctx) {
     // Initialize session for Step 1
     ctx.session.pending = { step: "awaiting_media", mediaType: "text" };
     // Step 1: Ask for content
-    await ctx.reply("Please send me the photo, video, or note you want to remember.");
+    await ctx.reply("Eslatib turishim kerak bo'lgan rasm, video, audio yoki xabarni yuboring.");
 }

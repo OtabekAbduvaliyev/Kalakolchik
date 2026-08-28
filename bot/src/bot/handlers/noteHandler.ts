@@ -31,7 +31,7 @@ export async function receiveNoteHandler(ctx: BotContext): Promise<boolean> {
   };
 
   // Step 3: Ask for reminder type selection
-  await ctx.reply("How would you like to receive reminders?", {
+  await ctx.reply("Eslatmani qanday tarzda qabul qilmoqchisiz?", {
     reply_markup: buildReminderTypeKeyboard(),
   });
 

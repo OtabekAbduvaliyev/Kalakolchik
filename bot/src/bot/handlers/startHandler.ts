@@ -22,6 +22,6 @@ export async function startHandler(ctx: CommandContext<BotContext>): Promise<voi
 
   // Step 1: Ask for content
   await ctx.reply(
-    "Please send me the photo, video, or note you want to remember."
+    "Eslatib turishim kerak bo'lgan rasm, video, audio yoki xabarni yuboring."
   );
 }

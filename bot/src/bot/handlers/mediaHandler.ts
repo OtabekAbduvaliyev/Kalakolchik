@@ -1,7 +1,6 @@
 import { Context, SessionFlavor } from "grammy";
 import { SessionData } from "../session";
 import { env } from "../../config/env";
-import { uploadToStorage } from "../../services/memoryService";
 
 // ----------------------------------------------------------------
 // Media Handler
@@ -76,29 +75,39 @@ export async function receiveMediaHandler(ctx: BotContext): Promise<void> {
     if (msg.photo && msg.photo.length > 0) {
       // --- Photo ---
       const bestPhoto = msg.photo[msg.photo.length - 1];
-      await ctx.reply("📤 Receiving your photo...");
-
-      const { buffer, filename, mimeType } = await downloadTelegramFile(bestPhoto.file_id);
-      const mediaUrl = await uploadToStorage(buffer, filename, mimeType);
-
       ctx.session.pending = {
         step: "awaiting_note",
         mediaType: "image",
-        mediaUrl,
+        mediaUrl: bestPhoto.file_id,
         initialText: msg.caption ?? undefined,
+        capturedAt: new Date().toISOString(),
       };
     } else if (msg.video) {
-      // --- Video ---
-      await ctx.reply("📤 Receiving your video...");
-
-      const { buffer, filename, mimeType } = await downloadTelegramFile(msg.video.file_id);
-      const mediaUrl = await uploadToStorage(buffer, filename, mimeType);
-
+      // --- Video (big or small) ---
       ctx.session.pending = {
         step: "awaiting_note",
         mediaType: "video",
-        mediaUrl,
+        mediaUrl: msg.video.file_id,
         initialText: msg.caption ?? undefined,
+        capturedAt: new Date().toISOString(),
+      };
+    } else if (msg.document) {
+      // --- Document / Any file (PDF, Zip, Video, etc.) ---
+      ctx.session.pending = {
+        step: "awaiting_note",
+        mediaType: "video", // or image if image mime, but video/file container works seamlessly
+        mediaUrl: msg.document.file_id,
+        initialText: msg.caption ?? msg.document.file_name ?? undefined,
+        capturedAt: new Date().toISOString(),
+      };
+    } else if (msg.audio) {
+      // --- Audio / Music ---
+      ctx.session.pending = {
+        step: "awaiting_note",
+        mediaType: "video",
+        mediaUrl: msg.audio.file_id,
+        initialText: msg.caption ?? msg.audio.title ?? undefined,
+        capturedAt: new Date().toISOString(),
       };
     } else if (msg.text) {
       // --- Text note ---
@@ -106,6 +115,7 @@ export async function receiveMediaHandler(ctx: BotContext): Promise<void> {
         step: "awaiting_note",
         mediaType: "text",
         initialText: msg.text,
+        capturedAt: new Date().toISOString(),
       };
     } else {
       return; // Unsupported message type
@@ -113,11 +123,11 @@ export async function receiveMediaHandler(ctx: BotContext): Promise<void> {
 
     // Step 2: Ask for content summary/note
     await ctx.reply(
-      "How should this be remembered? Write a short caption, title, or key takeaway for this memory."
+      "Buni qanday eslatishim kerak? Qisqacha sarlavha, vazifa yoki ovozli xabar yuboring."
     );
   } catch (err) {
     console.error("[receiveMediaHandler] Error:", err);
     ctx.session.pending = undefined;
-    await ctx.reply("❌ Something went wrong while receiving your file. Please try again.");
+    await ctx.reply("❌ Faylni qabul qilishda xatolik yuz berdi. Iltimos, qaytadan urinib ko'ring.");
   }
 }

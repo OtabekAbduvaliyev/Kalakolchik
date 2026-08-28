@@ -24,5 +24,5 @@ export const env = {
   TELEGRAM_BOT_TOKEN: requireEnv("TELEGRAM_BOT_TOKEN"),
   SUPABASE_URL: cleanSupabaseUrl(requireEnv("SUPABASE_URL")),
   SUPABASE_KEY: requireEnv("SUPABASE_KEY"),
-  GEMINI_API_KEY: process.env.GEMINI_API_KEY || "AQ.Ab8RN6JWYIcfGCyMRfLnn3BXkgUktjQA3sT5GpqdNf1BFsqGXA"
+  GEMINI_API_KEY: process.env.GEMINI_API_KEY ?? "",
 };

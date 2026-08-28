@@ -33,6 +33,7 @@ CREATE TABLE IF NOT EXISTS public.reminders (
   scheduled_at               TIMESTAMPTZ NOT NULL,
   is_recurring               BOOLEAN     NOT NULL DEFAULT FALSE,
   recurring_interval_minutes INTEGER,
+  end_date                   TIMESTAMPTZ,
   status                     TEXT        NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'sent', 'stopped')),
   created_at                 TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );

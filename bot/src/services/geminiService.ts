@@ -1,18 +1,8 @@
 import { GoogleGenerativeAI } from "@google/generative-ai";
 import { env } from "../config/env";
-
-// ----------------------------------------------------------------
-// Gemini Service
-// Sends a voice audio buffer to Gemini Flash and parses the
-// structured JSON response for note and schedule extraction.
-// Includes retry logic and a model fallback chain.
-// ----------------------------------------------------------------
-
-export interface VoiceParseResult {
-  note: string;
-  type: "one_time" | "recurring";
-  interval_details: string;
-}
+import { ParsedReminder } from "./pendingReminder";
+import { DEFAULT_TIMEZONE } from "../utils/timezone";
+import { parseRecurrence } from "../utils/dateParser";
 
 export class VoiceParseError extends Error {
   constructor(message: string) {
@@ -21,21 +11,37 @@ export class VoiceParseError extends Error {
   }
 }
 
-const SYSTEM_PROMPT = `You are an AI assistant for a spaced repetition memory bot.
-Analyze the user's voice recording and extract two things:
-1. "note": A clean transcript or summary of what the user wants to remember. Keep it concise and clear.
-2. "type": Either "one_time" or "recurring".
-   - Use "one_time" if the user mentions a specific date or a single future reminder.
-   - Use "recurring" if the user mentions a repeating frequency (e.g., "every day", "twice a week").
-3. "interval_details": The target dates or frequency extracted from the audio.
-   - For "one_time": provide a date string like "DD/MM/YYYY" or "in X days".
-   - For "recurring": provide a frequency string like "every 1 day", "every 2 hours", "every 3 days".
+function buildSystemPrompt(nowDate: string, nowTime: string, timezone: string): string {
+  return `You are a reminder extraction assistant. The user may speak in Uzbek, Russian, or English (most users speak Uzbek). Extract only information explicitly stated or unambiguously implied by the user's voice instruction.
+If the user speaks in Uzbek (e.g. "Ertaga soat 8 da eslat", "Har kuni soat 20:00 da", "Maqolani o'qish"), understand their intent accurately and extract the information.
+Never invent a reminder time. Never use the media upload time as the reminder time unless the user explicitly requests the same time as the upload. Resolve relative dates (e.g. "ertaga" -> tomorrow, "bugun" -> today, "indin" / "indinga" -> day after tomorrow) using the supplied current date and timezone. Return structured JSON. Use null for missing values.
 
-If you cannot determine the schedule, use "recurring" with "interval_details": "every 1 day" as a safe default.
-Return ONLY valid JSON with no markdown fences, no extra text.
-Example: {"note":"Review flashcards","type":"recurring","interval_details":"every 1 day"}`;
+Current date: ${nowDate}
+Current time: ${nowTime}
+Timezone: ${timezone}
 
-// Models to try in order (most stable first)
+Prioritize:
+1. User's explicit instruction
+2. Explicit date/time
+3. Explicit recurrence
+4. Explicit end date
+5. Never guess critical scheduling information
+
+Return ONLY valid JSON with these keys:
+- "note": string | null — the action / note (e.g. "Read this", "Maqolani o'qish", "Vazifa"). Keep the user's language.
+- "reminderType": "one_time" | "recurring" | null
+- "date": "YYYY-MM-DD" | null — start/one-time date. Resolve "ertaga" (tomorrow), "bugun" (today), etc. using Current date.
+- "time": "HH:MM" | null — 24-hour local time. "8 da" / "soat 8 da" → "08:00", "kechki 8 da" / "20:00 da" → "20:00". "kechqurun" without hour is NOT a time — leave time null.
+- "timezone": string | null — default "${timezone}" if unspecified
+- "intervalMinutes": number | null — har kuni = 1440, har 2 kunda = 2880, har hafta = 10080, kuniga ikki marta = 720
+- "recurrenceText": string | null — e.g. "Har kuni", "Har 2 kunda", "Har hafta" (or "Every day" if English)
+- "endDate": "YYYY-MM-DD" | null — e.g. "1-sentabrgacha", "7 kun davomida"
+- "useUploadTime": boolean — true ONLY if the user explicitly asked for the same time as sending/uploading
+
+Do not default reminderType to recurring. Do not fill time unless stated or unambiguously implied as a clock time.
+Example: {"note":"Maqolani o'qish","reminderType":"recurring","date":null,"time":"20:00","timezone":"${timezone}","intervalMinutes":1440,"recurrenceText":"Har kuni","endDate":"2026-09-01","useUploadTime":false}`;
+}
+
 const MODEL_FALLBACK_CHAIN = [
   "gemini-2.5-flash",
   "gemini-2.5-pro",
@@ -43,15 +49,12 @@ const MODEL_FALLBACK_CHAIN = [
   "gemini-3.6-flash",
 ];
 
-/**
- * Attempts a single Gemini API call with the given model.
- * Throws the original error so the caller can decide to retry or fallback.
- */
 async function tryModel(
   apiKey: string,
   modelName: string,
   base64Audio: string,
-  mimeType: string
+  mimeType: string,
+  prompt: string
 ): Promise<string> {
   const genAI = new GoogleGenerativeAI(apiKey);
   const model = genAI.getGenerativeModel({
@@ -69,7 +72,7 @@ async function tryModel(
         mimeType,
       },
     },
-    SYSTEM_PROMPT,
+    prompt,
   ]);
 
   const text = result.response.text()?.trim();
@@ -77,29 +80,83 @@ async function tryModel(
   return text;
 }
 
-/**
- * Sends a voice audio buffer to Gemini Flash and returns structured parse results.
- * Tries each model in the fallback chain. Retries 503 (overloaded) errors once.
- */
+function nullishString(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  const trimmed = value.trim();
+  if (!trimmed || trimmed.toLowerCase() === "null") return null;
+  return trimmed;
+}
+
+function nullishNumber(value: unknown): number | null {
+  if (typeof value === "number" && Number.isFinite(value) && value > 0) return value;
+  if (typeof value === "string" && value.trim() && !Number.isNaN(Number(value))) {
+    const n = Number(value);
+    return n > 0 ? n : null;
+  }
+  return null;
+}
+
+function normalizeParsed(raw: Record<string, unknown>, fallbackTz: string): ParsedReminder {
+  const reminderTypeRaw = nullishString(raw.reminderType) ?? nullishString(raw.type);
+  let reminderType: ParsedReminder["reminderType"] = null;
+  if (reminderTypeRaw === "one_time" || reminderTypeRaw === "onetime") reminderType = "one_time";
+  if (reminderTypeRaw === "recurring" || reminderTypeRaw === "cycle") reminderType = "recurring";
+
+  let time = nullishString(raw.time);
+  if (time && /evening|night|morning|afternoon/i.test(time) && !/\d/.test(time)) {
+    time = null;
+  }
+
+  let intervalMinutes = nullishNumber(raw.intervalMinutes);
+  let recurrenceText = nullishString(raw.recurrenceText) ?? nullishString(raw.interval_details);
+
+  if (!intervalMinutes && recurrenceText) {
+    const rec = parseRecurrence(recurrenceText);
+    if (rec) {
+      intervalMinutes = rec.intervalMinutes;
+      recurrenceText = rec.recurrenceText;
+    }
+  }
+
+  const useUploadTime = raw.useUploadTime === true;
+
+  return {
+    note: nullishString(raw.note),
+    reminderType,
+    date: nullishString(raw.date),
+    time: useUploadTime ? null : time,
+    timezone: nullishString(raw.timezone) ?? fallbackTz,
+    intervalMinutes,
+    recurrenceText,
+    endDate: nullishString(raw.endDate),
+    useUploadTime,
+  };
+}
+
 export async function parseVoiceNote(
   audioBuffer: Buffer,
-  mimeType: string = "audio/ogg"
-): Promise<VoiceParseResult> {
+  mimeType: string = "audio/ogg",
+  context: { date: string; time: string; timezone?: string } = {
+    date: "",
+    time: "",
+    timezone: DEFAULT_TIMEZONE,
+  }
+): Promise<ParsedReminder> {
   if (!env.GEMINI_API_KEY) {
     throw new VoiceParseError("GEMINI_API_KEY is not set in .env file.");
   }
 
+  const timezone = context.timezone || DEFAULT_TIMEZONE;
+  const prompt = buildSystemPrompt(context.date, context.time, timezone);
   const base64Audio = audioBuffer.toString("base64");
   let lastError: unknown;
 
   for (const modelName of MODEL_FALLBACK_CHAIN) {
-    // Try each model up to 2 times (once for 503 retry)
     for (let attempt = 1; attempt <= 2; attempt++) {
       try {
         console.log(`[geminiService] Trying model: ${modelName} (attempt ${attempt})`);
-        const rawText = await tryModel(env.GEMINI_API_KEY, modelName, base64Audio, mimeType);
+        const rawText = await tryModel(env.GEMINI_API_KEY, modelName, base64Audio, mimeType, prompt);
 
-        // --- Parse and validate JSON ---
         let parsed: unknown;
         try {
           const cleaned = rawText.replace(/^```json\s*|```$/g, "").trim();
@@ -110,50 +167,36 @@ export async function parseVoiceNote(
           );
         }
 
-        if (
-          typeof parsed !== "object" ||
-          parsed === null ||
-          typeof (parsed as any).note !== "string" ||
-          !["one_time", "recurring"].includes((parsed as any).type) ||
-          typeof (parsed as any).interval_details !== "string"
-        ) {
-          throw new VoiceParseError(
-            `Gemini response missing required fields: ${rawText.slice(0, 200)}`
-          );
+        if (typeof parsed !== "object" || parsed === null) {
+          throw new VoiceParseError(`Gemini response was not an object: ${rawText.slice(0, 200)}`);
         }
 
+        const normalized = normalizeParsed(parsed as Record<string, unknown>, timezone);
         console.log(`[geminiService] Success with model: ${modelName}`);
-        return parsed as VoiceParseResult;
-
+        return normalized;
       } catch (err: any) {
         lastError = err;
         const status = err?.status ?? 0;
 
         if (status === 503 && attempt === 1) {
-          // 503 = model overloaded: wait 2 seconds and retry once
           console.warn(`[geminiService] ${modelName} is overloaded (503), retrying in 2s...`);
           await new Promise((r) => setTimeout(r, 2000));
           continue;
         }
 
         if (status === 404 || status === 400) {
-          // 404 = model not available for this key: skip to next model
           console.warn(`[geminiService] ${modelName} not available (${status}), trying next model...`);
-          break; // break inner loop, try next model
+          break;
         }
 
-        // For other errors, break inner and try next model
         console.warn(`[geminiService] ${modelName} failed (${status}): ${err?.message?.slice(0, 100)}`);
         break;
       }
     }
   }
 
-  // All models failed
   console.error("[geminiService] All models failed. Last error:", lastError);
   throw new VoiceParseError(
     "All Gemini models are currently unavailable. Please try again in a moment."
   );
 }
-
-

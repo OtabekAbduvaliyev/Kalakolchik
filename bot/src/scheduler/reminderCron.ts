@@ -35,40 +35,58 @@ export function startReminderScheduler(): void {
       const { reminder_id, telegram_id, media_type, media_url, content_text } = reminder;
 
       try {
-        const reminderHeader = `🔔 *Time to review!*\n\n`;
+        const reminderHeader = `🔔 *Ko'rib chiqish vaqti keldi!*\n\n`;
 
         if (media_type === "text") {
           // Send text note
           await bot.api.sendMessage(
             telegram_id,
-            reminderHeader + (content_text ?? "_(your saved note)_"),
+            reminderHeader + (content_text ?? "_(saqlangan xabar)_"),
             { parse_mode: "Markdown" }
           );
         } else if (media_type === "image" && media_url) {
-          // Send photo
+          // Send photo (supports Telegram file_id or external URL)
+          const photoInput = media_url.startsWith("http")
+            ? new InputFile(new URL(media_url))
+            : media_url;
           await bot.api.sendPhoto(
             telegram_id,
-            new InputFile(new URL(media_url)),
+            photoInput,
             {
               caption: reminderHeader + (content_text ?? ""),
               parse_mode: "Markdown",
             }
           );
         } else if (media_type === "video" && media_url) {
-          // Send video
-          await bot.api.sendVideo(
-            telegram_id,
-            new InputFile(new URL(media_url)),
-            {
-              caption: reminderHeader + (content_text ?? ""),
-              parse_mode: "Markdown",
-            }
-          );
+          // Send video / document (supports Telegram file_id or external URL)
+          const videoInput = media_url.startsWith("http")
+            ? new InputFile(new URL(media_url))
+            : media_url;
+          try {
+            await bot.api.sendVideo(
+              telegram_id,
+              videoInput,
+              {
+                caption: reminderHeader + (content_text ?? ""),
+                parse_mode: "Markdown",
+              }
+            );
+          } catch (vidErr) {
+            // If it's a document/file sent as video, fallback to sendDocument
+            await bot.api.sendDocument(
+              telegram_id,
+              videoInput,
+              {
+                caption: reminderHeader + (content_text ?? ""),
+                parse_mode: "Markdown",
+              }
+            );
+          }
         } else {
-          // Fallback: send link if media_url exists
+          // Fallback: send message
           await bot.api.sendMessage(
             telegram_id,
-            reminderHeader + (content_text ?? "") + (media_url ? `\n\n🔗 [View file](${media_url})` : ""),
+            reminderHeader + (content_text ?? "") + (media_url && media_url.startsWith("http") ? `\n\n🔗 [Faylni ochish](${media_url})` : ""),
             { parse_mode: "Markdown" }
           );
         }
@@ -77,7 +95,8 @@ export function startReminderScheduler(): void {
         await processReminderSent(
           reminder_id, 
           reminder.is_recurring, 
-          reminder.recurring_interval_minutes
+          reminder.recurring_interval_minutes,
+          reminder.end_date
         );
         console.log(`[Scheduler] Processed reminder ${reminder_id} for user ${telegram_id}.`);
       } catch (err) {

@@ -11,9 +11,7 @@ const memoryService_1 = require("../../services/memoryService");
 const reminderService_1 = require("../../services/reminderService");
 const keyboards_1 = require("../keyboards");
 const dateParser_1 = require("../../utils/dateParser");
-/**
- * Formats a Date into a readable string (UTC).
- */
+const reminderFlow_1 = require("./reminderFlow");
 function formatDate(date) {
     return date.toLocaleString("en-US", {
         weekday: "short",
@@ -26,17 +24,23 @@ function formatDate(date) {
         hour12: false,
     }) + " UTC";
 }
-/**
- * Core save function: writes memory + reminder to Supabase.
- */
 async function saveMemoryAndReminder(telegramId, session, scheduledAt, isRecurring, recurringIntervalMinutes) {
     const pending = session.pending;
     const userId = await (0, userService_1.upsertUser)(telegramId);
+    let finalContentText = pending.initialText ?? "";
+    if (pending.noteText) {
+        if (finalContentText) {
+            finalContentText += `\n\n📌 **Note:** ${pending.noteText}`;
+        }
+        else {
+            finalContentText = pending.noteText;
+        }
+    }
     const memory = await (0, memoryService_1.createMemory)({
         userId,
-        mediaType: pending.mediaType,
+        mediaType: pending.mediaType === "voice" ? "text" : pending.mediaType,
         mediaUrl: pending.mediaUrl,
-        contentText: pending.noteText ?? pending.initialText,
+        contentText: finalContentText || undefined,
     });
     await (0, reminderService_1.createReminder)(memory.id, scheduledAt, isRecurring, recurringIntervalMinutes);
 }
@@ -44,8 +48,8 @@ async function saveMemoryAndReminder(telegramId, session, scheduledAt, isRecurri
  * Send the final summary card.
  */
 async function sendSummaryCard(ctx, noteText, typeText, scheduledAt) {
-    const note = noteText ? `\n📌 **Note:** ${noteText}` : "";
-    await ctx.reply(`✅ **Memory Saved Successfully!**${note}\n🗓️ **Type:** ${typeText}\n⏰ **Next Reminder:** ${formatDate(scheduledAt)}`, { parse_mode: "Markdown" });
+    const note = noteText ? `\n📌 **Izoh:** ${noteText}` : "";
+    await ctx.reply(`✅ **Eslatma muvaffaqiyatli saqlandi!**${note}\n🗓️ **Turi:** ${typeText}\n⏰ **Keyingi eslatma:** ${formatDate(scheduledAt)}`, { parse_mode: "Markdown" });
 }
 /**
  * Main callback handler for schedule button presses.
@@ -58,21 +62,23 @@ async function scheduleCallbackHandler(ctx) {
         return;
     const pending = ctx.session.pending;
     if (!pending) {
-        await ctx.reply("⚠️ Session expired. Please send your content again.");
+        await ctx.reply("⚠️ Sessiya muddati tugadi. Iltimos, xabaringizni qaytadan yuboring.");
         return;
     }
+    if (await (0, reminderFlow_1.handleReminderCallback)(ctx))
+        return;
     // --- Step 3: Choose Reminder Type ---
     if (pending.step === "awaiting_reminder_type") {
         if (data === "type_onetime") {
             ctx.session.pending = { ...pending, step: "awaiting_one_time_date", reminderType: "onetime" };
-            await ctx.reply("When should I remind you once?", {
+            await ctx.reply("Sizga qachon bir martalik eslatma yuboray?", {
                 reply_markup: (0, keyboards_1.buildOneTimeKeyboard)(),
             });
             return;
         }
         if (data === "type_cycle") {
             ctx.session.pending = { ...pending, step: "awaiting_cycle_interval", reminderType: "cycle" };
-            await ctx.reply("How often should this cycle? Enter an interval (e.g., 'every 2 hours', 'every 5 minutes', or 'every 1 day').");
+            await ctx.reply("Qanchalik tez-tez takrorlansin? Oraliqni kiriting (masalan: 'har 2 soatda', 'har 5 daqiqada' yoki 'har 1 kunda').");
             return;
         }
         return; // Ignore other buttons
@@ -81,7 +87,7 @@ async function scheduleCallbackHandler(ctx) {
     if (pending.step === "awaiting_one_time_date") {
         if (data === "remind_custom") {
             // Stay in awaiting_one_time_date, but we are now expecting text
-            await ctx.reply("Please enter a date in format `DD/MM/YYYY` (or `DD/MM/YYYY HH:MM` for specific time).", {
+            await ctx.reply("Iltimos, sanani `KK/OO/YYYY` (yoki vaqt bilan birga `KK/OO/YYYY SS:DD`) formatida kiriting.", {
                 parse_mode: "Markdown"
             });
             return;
@@ -100,11 +106,11 @@ async function scheduleCallbackHandler(ctx) {
             await saveMemoryAndReminder(telegramId, ctx.session, scheduledAt, false, null);
             const noteText = pending.noteText;
             ctx.session.pending = undefined; // Clear session
-            await sendSummaryCard(ctx, noteText, "One-Time", scheduledAt);
+            await sendSummaryCard(ctx, noteText, "Bir martalik", scheduledAt);
         }
         catch (err) {
             console.error("[scheduleCallbackHandler] Error saving to DB:", err);
-            await ctx.reply("❌ Something went wrong saving your reminder. Please try again.");
+            await ctx.reply("❌ Eslatmani saqlashda xatolik yuz berdi. Iltimos, qaytadan urinib ko'ring.");
         }
     }
 }
@@ -122,22 +128,24 @@ async function textInputHandler(ctx) {
     const telegramId = ctx.from?.id;
     if (!telegramId)
         return false;
+    if (await (0, reminderFlow_1.handleReminderText)(ctx))
+        return true;
     // --- Custom One-Time Date ---
     if (pending.step === "awaiting_one_time_date") {
         const scheduledAt = (0, dateParser_1.parseCustomDate)(text);
         if (!scheduledAt) {
-            await ctx.reply("❌ Invalid date format or date is in the past. Please use `DD/MM/YYYY` or `DD/MM/YYYY HH:MM`.", { parse_mode: "Markdown" });
+            await ctx.reply("❌ Noto'g'ri sana formati yoki o'tib ketgan sana kiritildi. Iltimos, `KK/OO/YYYY` yoki `KK/OO/YYYY SS:DD` formatida kiriting.", { parse_mode: "Markdown" });
             return true;
         }
         try {
             await saveMemoryAndReminder(telegramId, ctx.session, scheduledAt, false, null);
             const noteText = pending.noteText;
             ctx.session.pending = undefined;
-            await sendSummaryCard(ctx, noteText, "One-Time", scheduledAt);
+            await sendSummaryCard(ctx, noteText, "Bir martalik", scheduledAt);
         }
         catch (err) {
             console.error("[textInputHandler] Error saving custom date:", err);
-            await ctx.reply("❌ Something went wrong saving your reminder. Please try again.");
+            await ctx.reply("❌ Eslatmani saqlashda xatolik yuz berdi. Iltimos, qaytadan urinib ko'ring.");
         }
         return true;
     }
@@ -145,7 +153,7 @@ async function textInputHandler(ctx) {
     if (pending.step === "awaiting_cycle_interval") {
         const intervalMinutes = (0, dateParser_1.parseCycleInterval)(text);
         if (!intervalMinutes) {
-            await ctx.reply("❌ I didn't understand that interval. Try something like 'every 2 hours', 'every 3 days', or 'every 5 minutes'.");
+            await ctx.reply("❌ Bu oraliqni tushunmadim. Masalan: 'har 2 soatda', 'har 3 kunda' yoki 'har 5 daqiqada' deb yozing.");
             return true;
         }
         const scheduledAt = new Date(Date.now() + intervalMinutes * 60 * 1000);
@@ -153,11 +161,11 @@ async function textInputHandler(ctx) {
             await saveMemoryAndReminder(telegramId, ctx.session, scheduledAt, true, intervalMinutes);
             const noteText = pending.noteText;
             ctx.session.pending = undefined;
-            await sendSummaryCard(ctx, noteText, "Cycle (Repeating)", scheduledAt);
+            await sendSummaryCard(ctx, noteText, "Davriy (takrorlanuvchi)", scheduledAt);
         }
         catch (err) {
             console.error("[textInputHandler] Error saving cycle interval:", err);
-            await ctx.reply("❌ Something went wrong saving your reminder. Please try again.");
+            await ctx.reply("❌ Oraliqni saqlashda xatolik yuz berdi. Iltimos, qaytadan urinib ko'ring.");
         }
         return true;
     }
@@ -180,10 +188,10 @@ async function stopCycleCallbackHandler(ctx) {
     try {
         await (0, reminderService_1.stopReminder)(reminderId);
         console.log("[stopCycleCallbackHandler] Successfully stopped reminder:", reminderId);
-        await ctx.reply("✅ Cycle stopped successfully. You won't receive further reminders for this memory.");
+        await ctx.reply("✅ Eslatma muvaffaqiyatli to'xtatildi. Ushbu xotira bo'yicha boshqa eslatmalar olmaysiz.");
     }
     catch (err) {
         console.error("[stopCycleCallbackHandler] Error:", err);
-        await ctx.reply("❌ Something went wrong stopping the cycle. Please try again.");
+        await ctx.reply("❌ Eslatmani to'xtatishda xatolik yuz berdi. Iltimos, qaytadan urinib ko'ring.");
     }
 }

@@ -9,14 +9,26 @@ const supabase_1 = require("../db/supabase");
 /**
  * Creates a reminder for a given memory at a specific timestamp.
  */
-async function createReminder(memoryId, scheduledAt, isRecurring = false, recurringIntervalMinutes = null) {
-    const { error } = await supabase_1.supabase.from("reminders").insert({
+async function createReminder(memoryId, scheduledAt, isRecurring = false, recurringIntervalMinutes = null, endDate = null) {
+    const payload = {
         memory_id: memoryId,
         scheduled_at: scheduledAt.toISOString(),
         is_recurring: isRecurring,
         recurring_interval_minutes: recurringIntervalMinutes,
         status: "pending",
-    });
+    };
+    if (endDate)
+        payload.end_date = endDate;
+    const { error } = await supabase_1.supabase.from("reminders").insert(payload);
+    if (error && endDate && /end_date/i.test(error.message)) {
+        delete payload.end_date;
+        const retry = await supabase_1.supabase.from("reminders").insert(payload);
+        if (retry.error) {
+            throw new Error(`Failed to create reminder: ${retry.error.message}`);
+        }
+        console.warn("[createReminder] end_date column missing; reminder saved without end date.");
+        return;
+    }
     if (error) {
         throw new Error(`Failed to create reminder: ${error.message}`);
     }
@@ -27,9 +39,7 @@ async function createReminder(memoryId, scheduledAt, isRecurring = false, recurr
  * Excludes stopped reminders.
  */
 async function getDueReminders() {
-    const { data, error } = await supabase_1.supabase
-        .from("reminders")
-        .select(`
+    const baseColumns = `
       id,
       memory_id,
       is_recurring,
@@ -42,11 +52,33 @@ async function getDueReminders() {
           telegram_id
         )
       )
-    `)
+    `;
+    // Try with end_date first; if the column doesn't exist yet, retry without it
+    let data = null;
+    let hasEndDate = true;
+    const first = await supabase_1.supabase
+        .from("reminders")
+        .select(baseColumns.replace("recurring_interval_minutes,", "recurring_interval_minutes,\n      end_date,"))
         .eq("status", "pending")
         .lte("scheduled_at", new Date().toISOString());
-    if (error) {
-        throw new Error(`Failed to fetch due reminders: ${error.message}`);
+    if (first.error && /end_date/i.test(first.error.message)) {
+        hasEndDate = false;
+        console.warn("[getDueReminders] end_date column not found; querying without it. Run migration_add_end_date.sql to enable end-date enforcement.");
+        const fallback = await supabase_1.supabase
+            .from("reminders")
+            .select(baseColumns)
+            .eq("status", "pending")
+            .lte("scheduled_at", new Date().toISOString());
+        if (fallback.error) {
+            throw new Error(`Failed to fetch due reminders: ${fallback.error.message}`);
+        }
+        data = fallback.data;
+    }
+    else if (first.error) {
+        throw new Error(`Failed to fetch due reminders: ${first.error.message}`);
+    }
+    else {
+        data = first.data;
     }
     if (!data)
         return [];
@@ -60,13 +92,14 @@ async function getDueReminders() {
         telegram_id: row.memories.users.telegram_id,
         is_recurring: row.is_recurring,
         recurring_interval_minutes: row.recurring_interval_minutes,
+        end_date: hasEndDate ? (row.end_date ?? null) : null,
     }));
 }
 /**
  * Marks a reminder as sent. If recurring, calculates next scheduled_at and keeps it pending.
  * Skips processing if the reminder has been stopped.
  */
-async function processReminderSent(reminderId, isRecurring, recurringIntervalMinutes) {
+async function processReminderSent(reminderId, isRecurring, recurringIntervalMinutes, endDate = null) {
     // First check if the reminder has been stopped
     const { data: reminderData } = await supabase_1.supabase
         .from("reminders")
@@ -79,6 +112,21 @@ async function processReminderSent(reminderId, isRecurring, recurringIntervalMin
     }
     if (isRecurring && recurringIntervalMinutes) {
         const nextDate = new Date(Date.now() + recurringIntervalMinutes * 60 * 1000);
+        // Enforce end_date: if the next occurrence is past the deadline, stop the cycle
+        if (endDate) {
+            const endLimit = new Date(endDate);
+            if (nextDate > endLimit) {
+                console.log(`[processReminderSent] Reminder ${reminderId} has passed its end date, marking as stopped.`);
+                const { error } = await supabase_1.supabase
+                    .from("reminders")
+                    .update({ status: "stopped" })
+                    .eq("id", reminderId);
+                if (error) {
+                    throw new Error(`Failed to stop expired recurring reminder: ${error.message}`);
+                }
+                return;
+            }
+        }
         const { error } = await supabase_1.supabase
             .from("reminders")
             .update({ scheduled_at: nextDate.toISOString() })

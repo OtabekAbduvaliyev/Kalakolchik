@@ -14,17 +14,17 @@ async function stopHandler(ctx) {
     try {
         const activeCycles = await (0, reminderService_1.getActiveCyclesForUser)(telegramId);
         if (activeCycles.length === 0) {
-            await ctx.reply("You don't have any active recurring cycles to stop.");
+            await ctx.reply("Sizda to'xtatish uchun faol takrorlanuvchi eslatmalar yo'q.");
             return;
         }
         // Display active cycles with stop buttons
-        let message = "🔄 **Your Active Cycles:**\n\n";
+        let message = "🔄 **Faol takrorlanuvchi eslatmalaringiz:**\n\n";
         activeCycles.forEach((cycle, index) => {
-            const noteText = cycle.content_text || "No note";
+            const noteText = cycle.content_text || "Izohsiz";
             const scheduledDate = new Date(cycle.scheduled_at).toLocaleString();
-            message += `${index + 1}. **${noteText}**\n   Next: ${scheduledDate}\n\n`;
+            message += `${index + 1}. **${noteText}**\n   Keyingi: ${scheduledDate}\n\n`;
         });
-        message += "Select a cycle to stop:";
+        message += "To'xtatmoqchi bo'lgan eslatmani tanlang:";
         await ctx.reply(message, {
             parse_mode: "Markdown",
             reply_markup: (0, keyboards_1.buildStopCycleKeyboard)(activeCycles),
@@ -32,6 +32,6 @@ async function stopHandler(ctx) {
     }
     catch (err) {
         console.error("[stopHandler] Error:", err);
-        await ctx.reply("❌ Something went wrong fetching your active cycles. Please try again.");
+        await ctx.reply("❌ Faol eslatmalarni olishda xatolik yuz berdi. Iltimos, qaytadan urinib ko'ring.");
     }
 }

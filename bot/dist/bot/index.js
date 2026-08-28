@@ -8,6 +8,7 @@ const stopHandler_1 = require("./handlers/stopHandler");
 const mediaHandler_1 = require("./handlers/mediaHandler");
 const noteHandler_1 = require("./handlers/noteHandler");
 const callbackHandler_1 = require("./handlers/callbackHandler");
+const voiceHandler_1 = require("./handlers/voiceHandler");
 exports.bot = new grammy_1.Bot(env_1.env.TELEGRAM_BOT_TOKEN);
 // --- Session Middleware ---
 // Stores per-chat conversation state in memory.
@@ -18,11 +19,28 @@ exports.bot.use((0, grammy_1.session)({
 exports.bot.command("start", startHandler_1.startHandler);
 exports.bot.command("stop", stopHandler_1.stopHandler);
 // --- Inline Keyboard Callback Handlers ---
-exports.bot.callbackQuery(["type_onetime", "type_cycle", "remind_1d", "remind_3d", "remind_5d", "remind_custom"], callbackHandler_1.scheduleCallbackHandler);
+// All callback data values emitted by reminder flow keyboards must be listed here.
+// grammY silently drops callbacks not matching any registered filter.
+exports.bot.callbackQuery([
+    // Reminder type selection (old flow + voice flow)
+    "type_onetime", "type_cycle",
+    // One-time quick date selection (old flow)
+    "remind_1d", "remind_3d", "remind_5d", "remind_custom",
+    // Preview confirmation (voice flow)
+    "voice_confirm", "voice_edit", "voice_cancel",
+    // Time picker keyboard
+    "time_08:00", "time_13:00", "time_18:00", "time_20:00", "time_21:00", "time_custom",
+    // Edit field selection keyboard
+    "edit_field_action", "edit_field_date", "edit_field_time",
+    "edit_field_frequency", "edit_field_end", "edit_field_back",
+], callbackHandler_1.scheduleCallbackHandler);
 // --- Stop Cycle Callback Handler ---
 exports.bot.callbackQuery(/^stop_/, callbackHandler_1.stopCycleCallbackHandler);
-// --- Message Handler (Text / Photo / Video) ---
-exports.bot.on(["message:text", "message:photo", "message:video"], async (ctx) => {
+// --- Voice Note Handler (Gemini Flash) ---
+// Must be registered BEFORE the generic text/media handler
+exports.bot.on("message:voice", voiceHandler_1.voiceHandler);
+// --- Message Handler (Text / Photo / Video / Document / Audio) ---
+exports.bot.on(["message:text", "message:photo", "message:video", "message:document", "message:audio"], async (ctx) => {
     const text = ctx.message?.text;
     // 1. Skip commands
     if (text?.startsWith("/"))
