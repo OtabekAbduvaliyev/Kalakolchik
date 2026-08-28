@@ -17,6 +17,7 @@ exports.bot.use((0, grammy_1.session)({
 }));
 // --- Command Handlers ---
 exports.bot.command("start", startHandler_1.startHandler);
+exports.bot.command(["about", "help"], startHandler_1.startHandler);
 exports.bot.command("stop", stopHandler_1.stopHandler);
 // --- Inline Keyboard Callback Handlers ---
 // All callback data values emitted by reminder flow keyboards must be listed here.

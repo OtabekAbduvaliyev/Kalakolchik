@@ -20,8 +20,12 @@ export async function startHandler(ctx: CommandContext<BotContext>): Promise<voi
   // Initialize session for Step 1
   ctx.session.pending = { step: "awaiting_media", mediaType: "text" };
 
-  // Step 1: Ask for content
-  await ctx.reply(
-    "Eslatib turishim kerak bo'lgan rasm, video, audio yoki xabarni yuboring."
-  );
+  const firstName = ctx.from?.first_name ? ` ${ctx.from.first_name}` : "";
+
+  const welcomeMessage = 
+`👋 **Assalomu alaykum${firstName}!**
+
+Eslatib turishim kerak bo'lgan rasm, video, audio yoki xabarni yuboring:`;
+
+  await ctx.reply(welcomeMessage, { parse_mode: "Markdown" });
 }

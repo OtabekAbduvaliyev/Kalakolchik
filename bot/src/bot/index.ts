@@ -26,6 +26,7 @@ bot.use(
 
 // --- Command Handlers ---
 bot.command("start", startHandler);
+bot.command(["about", "help"], startHandler);
 bot.command("stop", stopHandler);
 
 // --- Inline Keyboard Callback Handlers ---
