@@ -6,6 +6,7 @@ import { parsedToPending, logReminder } from "../../services/pendingReminder";
 import { continueReminderCollection } from "./reminderFlow";
 import { buildReminderTypeKeyboard } from "../keyboards";
 import { DEFAULT_TIMEZONE, nowContext } from "../../utils/timezone";
+import { getUserTimezone } from "../../services/userService";
 
 type BotContext = Context & SessionFlavor<SessionData>;
 
@@ -19,6 +20,9 @@ function getVoiceMime(filePath: string): string {
 export async function voiceHandler(ctx: BotContext): Promise<void> {
   const msg = ctx.message;
   if (!msg?.voice) return;
+
+  const telegramId = ctx.from?.id;
+  const userTz = telegramId ? await getUserTimezone(telegramId) : DEFAULT_TIMEZONE;
 
   const existing = ctx.session.pending;
   const mediaUrl = existing?.mediaUrl;
@@ -40,12 +44,12 @@ export async function voiceHandler(ctx: BotContext): Promise<void> {
   try {
     const { buffer, filename } = await downloadTelegramFile(msg.voice.file_id);
     const mimeType = getVoiceMime(filename);
-    const clock = nowContext(DEFAULT_TIMEZONE);
+    const clock = nowContext(userTz);
 
     const parsed = await parseVoiceNote(buffer, mimeType, {
       date: clock.date,
       time: clock.time,
-      timezone: DEFAULT_TIMEZONE,
+      timezone: userTz,
     });
 
     logReminder("Parsed:", {
@@ -61,7 +65,7 @@ export async function voiceHandler(ctx: BotContext): Promise<void> {
     });
 
     const newReminder = parsedToPending(parsed);
-    newReminder.timezone = newReminder.timezone || DEFAULT_TIMEZONE;
+    newReminder.timezone = newReminder.timezone || userTz;
 
     let mergedReminder = newReminder;
     if (existing?.reminder) {

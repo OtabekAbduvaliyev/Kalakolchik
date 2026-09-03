@@ -1,4 +1,4 @@
-import { bot } from "./bot/index";
+import { bot, registerBotCommands } from "./bot/index";
 import { startReminderScheduler } from "./scheduler/reminderCron";
 
 // ----------------------------------------------------------------
@@ -8,6 +8,9 @@ import { startReminderScheduler } from "./scheduler/reminderCron";
 
 async function main(): Promise<void> {
   console.log("🔔 Kalakolchik Bot is starting...");
+
+  // Register default bot commands with Telegram
+  await registerBotCommands(bot);
 
   // Start the background reminder scheduler
   startReminderScheduler();

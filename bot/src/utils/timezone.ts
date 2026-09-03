@@ -121,3 +121,50 @@ export function formatLongDate(ymd: string, timeZone: string): string {
 export function endOfDateInTimeZone(ymd: string, timeZone: string): Date | null {
   return zonedWallTimeToUtc(ymd, "23:59", timeZone);
 }
+
+/**
+ * Validates if an IANA timezone string is recognized by Intl.
+ */
+export function isValidTimeZone(timeZone: string): boolean {
+  try {
+    Intl.DateTimeFormat(undefined, { timeZone });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Formats a Date in the given timezone as readable Uzbek date and time:
+ * e.g. "4-sentabr, 2026 20:15"
+ */
+export function formatZoned(date: Date, timeZone: string): string {
+  const parts = getZonedParts(date, timeZone);
+  const monthName = UZ_MONTHS[parts.month - 1] ?? "";
+  return `${parts.day}-${monthName}, ${parts.year} ${parts.time}`;
+}
+
+/**
+ * Formats a Date in the given timezone with the timezone name:
+ * e.g. "4-sentabr, 2026 20:15 (Asia/Tashkent)"
+ */
+export function formatZonedWithTz(date: Date, timeZone: string): string {
+  return `${formatZoned(date, timeZone)} (${timeZone})`;
+}
+
+export interface TimezonePreset {
+  label: string;
+  value: string;
+}
+
+export const TIMEZONE_PRESETS: TimezonePreset[] = [
+  { label: "🇺🇿 Toshkent (UTC+5)", value: "Asia/Tashkent" },
+  { label: "🇺🇿 Samarqand (UTC+5)", value: "Asia/Samarkand" },
+  { label: "🇷🇺 Moskva (UTC+3)", value: "Europe/Moscow" },
+  { label: "🇦🇪 Dubay (UTC+4)", value: "Asia/Dubai" },
+  { label: "🇰🇿 Almati (UTC+5)", value: "Asia/Almaty" },
+  { label: "🇹🇷 Istanbul (UTC+3)", value: "Europe/Istanbul" },
+  { label: "🇬🇧 London (UTC+0/+1)", value: "Europe/London" },
+  { label: "🇺🇸 Nyu-York (UTC-5/-4)", value: "America/New_York" },
+];
+

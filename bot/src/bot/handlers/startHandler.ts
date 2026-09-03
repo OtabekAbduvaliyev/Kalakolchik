@@ -29,3 +29,12 @@ Eslatib turishim kerak bo'lgan rasm, video, audio yoki xabarni yuboring:`;
 
   await ctx.reply(welcomeMessage, { parse_mode: "Markdown" });
 }
+
+export async function newReminderHandler(ctx: CommandContext<BotContext>): Promise<void> {
+  const telegramId = ctx.from?.id;
+  if (!telegramId) return;
+
+  ctx.session.pending = { step: "awaiting_media", mediaType: "text" };
+  await ctx.reply("📝 Yangi eslatma yaratish uchun rasm, video, audio, ovozli xabar yoki matn yuboring:");
+}
+

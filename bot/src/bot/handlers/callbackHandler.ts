@@ -7,19 +7,13 @@ import { buildOneTimeKeyboard } from "../keyboards";
 import { parseCustomDate, parseCycleInterval } from "../../utils/dateParser";
 import { handleReminderCallback, handleReminderText } from "./reminderFlow";
 
+import { getUserTimezone, setUserTimezone } from "../../services/userService";
+import { formatZoned, formatZonedWithTz, DEFAULT_TIMEZONE, isValidTimeZone } from "../../utils/timezone";
+
 type BotContext = Context & SessionFlavor<SessionData>;
 
-export function formatDate(date: Date): string {
-  return date.toLocaleString("en-US", {
-    weekday: "short",
-    year: "numeric",
-    month: "short",
-    day: "numeric",
-    hour: "2-digit",
-    minute: "2-digit",
-    timeZone: "UTC",
-    hour12: false,
-  }) + " UTC";
+export function formatDate(date: Date, timeZone: string = DEFAULT_TIMEZONE): string {
+  return formatZonedWithTz(date, timeZone);
 }
 
 export async function saveMemoryAndReminder(
@@ -58,17 +52,18 @@ export async function saveMemoryAndReminder(
 }
 
 /**
- * Send the final summary card.
+ * Send the final summary card with user's timezone.
  */
 export async function sendSummaryCard(
   ctx: BotContext,
   noteText: string | undefined,
   typeText: string,
-  scheduledAt: Date
+  scheduledAt: Date,
+  timeZone: string = DEFAULT_TIMEZONE
 ): Promise<void> {
   const note = noteText ? `\n📌 **Izoh:** ${noteText}` : "";
   await ctx.reply(
-    `✅ **Eslatma muvaffaqiyatli saqlandi!**${note}\n🗓️ **Turi:** ${typeText}\n⏰ **Keyingi eslatma:** ${formatDate(scheduledAt)}`,
+    `✅ **Eslatma muvaffaqiyatli saqlandi!**${note}\n🗓️ **Turi:** ${typeText}\n⏰ **Keyingi eslatma:** ${formatDate(scheduledAt, timeZone)}`,
     { parse_mode: "Markdown" }
   );
 }
@@ -130,10 +125,11 @@ export async function scheduleCallbackHandler(
     const scheduledAt = new Date(Date.now() + addMinutes * 60 * 1000);
 
     try {
+      const userTz = await getUserTimezone(telegramId);
       await saveMemoryAndReminder(telegramId, ctx.session, scheduledAt, false, null);
       const noteText = pending.noteText;
       ctx.session.pending = undefined; // Clear session
-      await sendSummaryCard(ctx, noteText, "Bir martalik", scheduledAt);
+      await sendSummaryCard(ctx, noteText, "Bir martalik", scheduledAt, userTz);
     } catch (err) {
       console.error("[scheduleCallbackHandler] Error saving to DB:", err);
       await ctx.reply("❌ Eslatmani saqlashda xatolik yuz berdi. Iltimos, qaytadan urinib ko'ring.");
@@ -147,19 +143,35 @@ export async function scheduleCallbackHandler(
  */
 export async function textInputHandler(ctx: BotContext): Promise<boolean> {
   const pending = ctx.session.pending;
-  if (!pending) return false;
-
   const text = ctx.message?.text?.trim();
-  if (!text) return false;
-
   const telegramId = ctx.from?.id;
-  if (!telegramId) return false;
+
+  if (!telegramId || !text) return false;
+
+  // Check if user is typing a manual timezone (e.g. "Asia/Tashkent" or "Europe/Moscow")
+  if (!pending && isValidTimeZone(text)) {
+    try {
+      await setUserTimezone(telegramId, text);
+      const nowStr = formatZoned(new Date(), text);
+      await ctx.reply(
+        `✅ Vaqt mintaqangiz muvaffaqiyatli saqlandi: \`${text}\`\nHozirgi mahalliy vaqtingiz: *${nowStr}*`,
+        { parse_mode: "Markdown" }
+      );
+      return true;
+    } catch (err) {
+      console.error("[textInputHandler] Error updating timezone:", err);
+    }
+  }
+
+  if (!pending) return false;
 
   if (await handleReminderText(ctx)) return true;
 
+  const userTz = await getUserTimezone(telegramId);
+
   // --- Custom One-Time Date ---
   if (pending.step === "awaiting_one_time_date") {
-    const scheduledAt = parseCustomDate(text);
+    const scheduledAt = parseCustomDate(text, userTz);
     if (!scheduledAt) {
       await ctx.reply("❌ Noto'g'ri sana formati yoki o'tib ketgan sana kiritildi. Iltimos, `KK/OO/YYYY` yoki `KK/OO/YYYY SS:DD` formatida kiriting.", { parse_mode: "Markdown" });
       return true;
@@ -169,7 +181,7 @@ export async function textInputHandler(ctx: BotContext): Promise<boolean> {
       await saveMemoryAndReminder(telegramId, ctx.session, scheduledAt, false, null);
       const noteText = pending.noteText;
       ctx.session.pending = undefined;
-      await sendSummaryCard(ctx, noteText, "Bir martalik", scheduledAt);
+      await sendSummaryCard(ctx, noteText, "Bir martalik", scheduledAt, userTz);
     } catch (err) {
       console.error("[textInputHandler] Error saving custom date:", err);
       await ctx.reply("❌ Eslatmani saqlashda xatolik yuz berdi. Iltimos, qaytadan urinib ko'ring.");
@@ -191,7 +203,7 @@ export async function textInputHandler(ctx: BotContext): Promise<boolean> {
       await saveMemoryAndReminder(telegramId, ctx.session, scheduledAt, true, intervalMinutes);
       const noteText = pending.noteText;
       ctx.session.pending = undefined;
-      await sendSummaryCard(ctx, noteText, "Davriy (takrorlanuvchi)", scheduledAt);
+      await sendSummaryCard(ctx, noteText, "Davriy (takrorlanuvchi)", scheduledAt, userTz);
     } catch (err) {
       console.error("[textInputHandler] Error saving cycle interval:", err);
       await ctx.reply("❌ Oraliqni saqlashda xatolik yuz berdi. Iltimos, qaytadan urinib ko'ring.");
@@ -200,6 +212,33 @@ export async function textInputHandler(ctx: BotContext): Promise<boolean> {
   }
 
   return false;
+}
+
+/**
+ * Handles timezone button callback selections.
+ * Callback data format: "tz_{timeZone}"
+ */
+export async function timezoneCallbackHandler(
+  ctx: CallbackQueryContext<BotContext>
+): Promise<void> {
+  const data = ctx.callbackQuery.data;
+  await ctx.answerCallbackQuery();
+
+  const telegramId = ctx.from?.id;
+  if (!telegramId || !data?.startsWith("tz_")) return;
+
+  const newTz = data.replace("tz_", "");
+  try {
+    await setUserTimezone(telegramId, newTz);
+    const nowStr = formatZoned(new Date(), newTz);
+    await ctx.reply(
+      `✅ Vaqt mintaqangiz muvaffaqiyatli saqlandi: \`${newTz}\`\nHozirgi mahalliy vaqtingiz: *${nowStr}*`,
+      { parse_mode: "Markdown" }
+    );
+  } catch (err) {
+    console.error("[timezoneCallbackHandler] Error saving timezone:", err);
+    await ctx.reply("❌ Vaqt mintaqasini saqlashda xatolik yuz berdi.");
+  }
 }
 
 /**
@@ -219,14 +258,15 @@ export async function stopCycleCallbackHandler(
   }
 
   const reminderId = data.replace("stop_", "");
-  console.log("[stopCycleCallbackHandler] Stopping reminder:", reminderId);
+  const telegramId = ctx.from?.id;
+  console.log("[stopCycleCallbackHandler] Stopping reminder:", reminderId, "by user:", telegramId);
 
   try {
-    await stopReminder(reminderId);
+    await stopReminder(reminderId, telegramId);
     console.log("[stopCycleCallbackHandler] Successfully stopped reminder:", reminderId);
     await ctx.reply("✅ Eslatma muvaffaqiyatli to'xtatildi. Ushbu xotira bo'yicha boshqa eslatmalar olmaysiz.");
-  } catch (err) {
+  } catch (err: any) {
     console.error("[stopCycleCallbackHandler] Error:", err);
-    await ctx.reply("❌ Eslatmani to'xtatishda xatolik yuz berdi. Iltimos, qaytadan urinib ko'ring.");
+    await ctx.reply(err.message || "❌ Eslatmani to'xtatishda xatolik yuz berdi. Iltimos, qaytadan urinib ko'ring.");
   }
 }

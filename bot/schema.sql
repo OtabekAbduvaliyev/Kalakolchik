@@ -9,6 +9,7 @@
 CREATE TABLE IF NOT EXISTS public.users (
   id          UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
   telegram_id BIGINT      UNIQUE NOT NULL,
+  timezone    TEXT        NOT NULL DEFAULT 'Asia/Tashkent',
   created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 

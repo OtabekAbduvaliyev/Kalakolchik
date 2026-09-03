@@ -1,11 +1,20 @@
 import { Bot, session, Context, SessionFlavor } from "grammy";
 import { env } from "../config/env";
 import { SessionData } from "./session";
-import { startHandler } from "./handlers/startHandler";
+import { startHandler, newReminderHandler } from "./handlers/startHandler";
 import { stopHandler } from "./handlers/stopHandler";
+import { helpHandler } from "./handlers/helpHandler";
+import { cancelHandler } from "./handlers/cancelHandler";
+import { remindersHandler } from "./handlers/remindersHandler";
+import { timezoneHandler } from "./handlers/timezoneHandler";
 import { receiveMediaHandler } from "./handlers/mediaHandler";
 import { receiveNoteHandler } from "./handlers/noteHandler";
-import { scheduleCallbackHandler, textInputHandler, stopCycleCallbackHandler } from "./handlers/callbackHandler";
+import {
+  scheduleCallbackHandler,
+  textInputHandler,
+  stopCycleCallbackHandler,
+  timezoneCallbackHandler,
+} from "./handlers/callbackHandler";
 import { voiceHandler } from "./handlers/voiceHandler";
 
 // ----------------------------------------------------------------
@@ -15,6 +24,26 @@ import { voiceHandler } from "./handlers/voiceHandler";
 export type BotContext = Context & SessionFlavor<SessionData>;
 
 export const bot = new Bot<BotContext>(env.TELEGRAM_BOT_TOKEN);
+
+/**
+ * Registers default bot commands in the Telegram menu button
+ */
+export async function registerBotCommands(botInstance: Bot<BotContext>): Promise<void> {
+  try {
+    await botInstance.api.setMyCommands([
+      { command: "start", description: "Botni ishga tushirish / Xush kelibsiz" },
+      { command: "new", description: "Yangi eslatma yaratish" },
+      { command: "reminders", description: "Faol eslatmalar ro'yxati" },
+      { command: "stop", description: "Takrorlanuvchi eslatmalarni to'xtatish" },
+      { command: "timezone", description: "Vaqt mintaqasini sozlash" },
+      { command: "help", description: "Qo'llanma va yordam" },
+      { command: "cancel", description: "Joriy amalni bekor qilish" },
+    ]);
+    console.log("✅ Bot default commands registered successfully.");
+  } catch (err) {
+    console.error("⚠️ Failed to set bot commands:", err);
+  }
+}
 
 // --- Session Middleware ---
 // Stores per-chat conversation state in memory.
@@ -26,8 +55,18 @@ bot.use(
 
 // --- Command Handlers ---
 bot.command("start", startHandler);
-bot.command(["about", "help"], startHandler);
+bot.command("new", newReminderHandler);
+bot.command(["reminders", "list"], remindersHandler);
 bot.command("stop", stopHandler);
+bot.command("timezone", timezoneHandler);
+bot.command(["about", "help"], helpHandler);
+bot.command("cancel", cancelHandler);
+
+// --- Timezone Selection Callback Handler ---
+bot.callbackQuery(/^tz_/, timezoneCallbackHandler);
+
+// --- Stop Cycle Callback Handler ---
+bot.callbackQuery(/^stop_/, stopCycleCallbackHandler);
 
 // --- Inline Keyboard Callback Handlers ---
 // All callback data values emitted by reminder flow keyboards must be listed here.
@@ -48,9 +87,6 @@ bot.callbackQuery(
   ],
   scheduleCallbackHandler
 );
-
-// --- Stop Cycle Callback Handler ---
-bot.callbackQuery(/^stop_/, stopCycleCallbackHandler);
 
 // --- Voice Note Handler (Gemini Flash) ---
 // Must be registered BEFORE the generic text/media handler

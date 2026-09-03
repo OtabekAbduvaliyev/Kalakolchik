@@ -63,3 +63,25 @@ export function buildEditChoiceKeyboard(): InlineKeyboard {
     .text("⏳ Tugash sanasi", "edit_field_end")
     .text("⬅️ Orqaga", "edit_field_back");
 }
+
+import { TIMEZONE_PRESETS } from "../utils/timezone";
+
+export function buildTimezoneKeyboard(currentTimezone?: string): InlineKeyboard {
+  const keyboard = new InlineKeyboard();
+
+  TIMEZONE_PRESETS.forEach((preset, index) => {
+    const isCurrent = currentTimezone === preset.value;
+    const label = isCurrent ? `✅ ${preset.label}` : preset.label;
+    const callbackData = `tz_${preset.value}`;
+
+    keyboard.text(label, callbackData);
+
+    // 2 buttons per row
+    if ((index + 1) % 2 === 0 && index < TIMEZONE_PRESETS.length - 1) {
+      keyboard.row();
+    }
+  });
+
+  return keyboard;
+}
+

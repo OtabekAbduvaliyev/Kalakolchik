@@ -1,3 +1,5 @@
+import { DEFAULT_TIMEZONE, zonedWallTimeToUtc } from "./timezone";
+
 /**
  * Utility functions for parsing custom dates and intervals.
  * Enhanced validation for graceful error handling.
@@ -6,8 +8,9 @@
 /**
  * Parses a date string in format DD/MM/YYYY or DD/MM/YYYY HH:MM
  * Returns a Date object if valid, null otherwise.
+ * Interprets the wall clock time in the user's `timeZone` (default Asia/Tashkent).
  */
-export function parseCustomDate(input: string): Date | null {
+export function parseCustomDate(input: string, timeZone: string = DEFAULT_TIMEZONE): Date | null {
   const str = input.trim();
   // Regex to match DD/MM/YYYY or DD/MM/YYYY HH:MM
   const regex = /^(\d{1,2})\/(\d{1,2})\/(\d{4})(?:\s+(\d{1,2}):(\d{2}))?$/;
@@ -15,31 +18,29 @@ export function parseCustomDate(input: string): Date | null {
   if (!match) return null;
 
   const day = parseInt(match[1], 10);
-  const month = parseInt(match[2], 10) - 1; // JS months are 0-indexed
+  const month = parseInt(match[2], 10); // 1-12
   const year = parseInt(match[3], 10);
   const hour = match[4] ? parseInt(match[4], 10) : 12; // Default to noon if no time provided
   const minute = match[5] ? parseInt(match[5], 10) : 0;
 
   // Validate ranges
-  if (month < 0 || month > 11) return null;
+  if (month < 1 || month > 12) return null;
   if (day < 1 || day > 31) return null;
   if (hour < 0 || hour > 23) return null;
   if (minute < 0 || minute > 59) return null;
-  if (year < 2024 || year > 2100) return null; // Reasonable year range
+  if (year < 2024 || year > 2100) return null;
 
-  const date = new Date(year, month, day, hour, minute);
-
-  // Validate the parsed date (JS Date is forgiving and wraps around invalid days)
-  if (
-    date.getFullYear() !== year ||
-    date.getMonth() !== month ||
-    date.getDate() !== day
-  ) {
+  if (!isValidYmd(year, month, day)) {
     return null;
   }
 
+  const dateYmd = `${year}-${pad(month)}-${pad(day)}`;
+  const timeHm = `${pad(hour)}:${pad(minute)}`;
+  const date = zonedWallTimeToUtc(dateYmd, timeHm, timeZone);
+  if (!date) return null;
+
   // Ensure date is in the future
-  if (date <= new Date()) {
+  if (date.getTime() <= Date.now()) {
     return null;
   }
 
@@ -179,6 +180,26 @@ export function parseFlexibleDateYmd(input: string, todayYmd: string): string | 
   const str = input.trim().replace(/^until\s+/i, "");
   const [ty, tm, td] = todayYmd.split("-").map(Number);
 
+  const cleanStr = str.replace(/^(on|at)\s+/i, "").toLowerCase();
+
+  const addDaysToToday = (days: number): string => {
+    const baseDate = new Date(Date.UTC(ty, tm - 1, td));
+    baseDate.setUTCDate(baseDate.getUTCDate() + days);
+    return `${baseDate.getUTCFullYear()}-${pad(baseDate.getUTCMonth() + 1)}-${pad(baseDate.getUTCDate())}`;
+  };
+
+  if (/^(today|bugun)$/i.test(cleanStr)) return todayYmd;
+  if (/^(tomorrow|ertaga)$/i.test(cleanStr)) return addDaysToToday(1);
+  if (/^(day after tomorrow|indin|indinga)$/i.test(cleanStr)) return addDaysToToday(2);
+
+  const daysLaterMatch = cleanStr.match(/^(\d+)\s+kundan\s+keyin$/i) || cleanStr.match(/^in\s+(\d+)\s+days?$/i);
+  if (daysLaterMatch) {
+    const days = parseInt(daysLaterMatch[1], 10);
+    if (days > 0 && days < 3650) {
+      return addDaysToToday(days);
+    }
+  }
+
   const iso = str.match(/^(\d{4})-(\d{2})-(\d{2})$/);
   if (iso) {
     const year = parseInt(iso[1], 10);
@@ -196,7 +217,7 @@ export function parseFlexibleDateYmd(input: string, todayYmd: string): string | 
   }
 
   const named = str.match(
-    /^(?:(\d{1,2})\s+)?(january|february|march|april|may|june|july|august|september|october|november|december|jan|feb|mar|apr|jun|jul|aug|sep|sept|oct|nov|dec)(?:\s+(\d{1,2}))?(?:,?\s+(\d{4}))?$/i
+    /^(?:(\d{1,2})[-\s]+)?(january|february|march|april|may|june|july|august|september|october|november|december|jan|feb|mar|apr|jun|jul|aug|sep|sept|oct|nov|dec|yanvar|fevral|mart|aprel|mayis|iyun|iyul|avgust|sentabr|sentyabr|oktabr|oktyabr|noyabr|dekabr)(?:[-\s]+(\d{1,2}))?(?:,?\s+(\d{4}))?$/i
   );
   if (named) {
     const month = MONTHS[named[2].toLowerCase()];
@@ -210,9 +231,6 @@ export function parseFlexibleDateYmd(input: string, todayYmd: string): string | 
     return isValidYmd(year, month, day) ? `${year}-${pad(month)}-${pad(day)}` : null;
   }
 
-  if (/^(today|bugun)$/i.test(str)) return `${ty}-${pad(tm)}-${pad(td)}`;
-
-  void td;
   return null;
 }
 

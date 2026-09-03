@@ -203,12 +203,12 @@ export async function getActiveCyclesForUser(telegramId: number): Promise<Active
       id,
       scheduled_at,
       recurring_interval_minutes,
-      memories (
+      memories!inner (
         id,
         content_text,
         media_type,
         media_url,
-        users (
+        users!inner (
           telegram_id
         )
       )
@@ -225,22 +225,54 @@ export async function getActiveCyclesForUser(telegramId: number): Promise<Active
   if (!data) return [];
 
   // Flatten the nested join result into a flat structure
-  return data.map((row: any) => ({
-    reminder_id: row.id,
-    memory_id: row.memories.id,
-    content_text: row.memories.content_text,
-    media_type: row.memories.media_type,
-    scheduled_at: row.scheduled_at,
-    recurring_interval_minutes: row.recurring_interval_minutes,
-  }));
+  return data
+    .filter((row: any) => row.memories && row.memories.users)
+    .map((row: any) => ({
+      reminder_id: row.id,
+      memory_id: row.memories.id,
+      content_text: row.memories.content_text,
+      media_type: row.memories.media_type,
+      scheduled_at: row.scheduled_at,
+      recurring_interval_minutes: row.recurring_interval_minutes,
+    }));
 }
 
 /**
  * Stops a recurring reminder by setting its status to 'stopped'.
+ * Optionally verifies that the reminder belongs to telegramId.
  */
-export async function stopReminder(reminderId: string): Promise<void> {
-  console.log("[stopReminder] Attempting to stop reminder:", reminderId);
-  
+export async function stopReminder(reminderId: string, telegramId?: number): Promise<void> {
+  console.log("[stopReminder] Attempting to stop reminder:", reminderId, "by user:", telegramId);
+
+  if (telegramId) {
+    // Verify ownership so a user cannot stop another user's reminder
+    const { data: reminder, error: checkError } = await supabase
+      .from("reminders")
+      .select(
+        `
+        id,
+        memories!inner (
+          users!inner (
+            telegram_id
+          )
+        )
+      `
+      )
+      .eq("id", reminderId)
+      .eq("memories.users.telegram_id", telegramId)
+      .maybeSingle();
+
+    if (checkError) {
+      console.error("[stopReminder] Ownership check error:", checkError);
+      throw new Error(`Xatolik yuz berdi: ${checkError.message}`);
+    }
+
+    if (!reminder) {
+      console.warn(`[stopReminder] Unauthorized attempt to stop reminder ${reminderId} by user ${telegramId}`);
+      throw new Error("Ushbu eslatma sizga tegishli emas yoki topilmadi.");
+    }
+  }
+
   const { error, data } = await supabase
     .from("reminders")
     .update({ status: "stopped" })
@@ -254,3 +286,66 @@ export async function stopReminder(reminderId: string): Promise<void> {
 
   console.log("[stopReminder] Update result:", data);
 }
+
+export interface UserReminderItem {
+  reminder_id: string;
+  memory_id: string;
+  content_text: string | null;
+  media_type: string;
+  media_url: string | null;
+  scheduled_at: string;
+  is_recurring: boolean;
+  recurring_interval_minutes: number | null;
+  end_date: string | null;
+}
+
+/**
+ * Fetches all pending reminders (one-time and recurring) for a user,
+ * ordered by scheduled_at ascending.
+ */
+export async function getUserReminders(telegramId: number): Promise<UserReminderItem[]> {
+  const { data, error } = await supabase
+    .from("reminders")
+    .select(
+      `
+      id,
+      scheduled_at,
+      is_recurring,
+      recurring_interval_minutes,
+      end_date,
+      memories!inner (
+        id,
+        content_text,
+        media_type,
+        media_url,
+        users!inner (
+          telegram_id
+        )
+      )
+    `
+    )
+    .eq("status", "pending")
+    .eq("memories.users.telegram_id", telegramId)
+    .order("scheduled_at", { ascending: true });
+
+  if (error) {
+    throw new Error(`Failed to fetch user reminders: ${error.message}`);
+  }
+
+  if (!data) return [];
+
+  return data
+    .filter((row: any) => row.memories && row.memories.users)
+    .map((row: any) => ({
+      reminder_id: row.id,
+      memory_id: row.memories.id,
+      content_text: row.memories.content_text,
+      media_type: row.memories.media_type,
+      media_url: row.memories.media_url,
+      scheduled_at: row.scheduled_at,
+      is_recurring: row.is_recurring,
+      recurring_interval_minutes: row.recurring_interval_minutes,
+      end_date: row.end_date ?? null,
+    }));
+}
+

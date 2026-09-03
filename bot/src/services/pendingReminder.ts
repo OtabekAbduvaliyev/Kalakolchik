@@ -4,6 +4,7 @@ import {
   DEFAULT_TIMEZONE,
   endOfDateInTimeZone,
   formatLongDate,
+  getZonedParts,
   timeInTimeZone,
   todayInTimeZone,
   zonedWallTimeToUtc,
@@ -107,10 +108,9 @@ export function computeScheduledAt(
   if (!time) return null;
 
   let date = filled.date;
-  if (reminderType === "recurring" && !date) {
+  if (!date) {
     date = todayInTimeZone(timezone);
   }
-  if (!date) return null;
 
   let dt = zonedWallTimeToUtc(date, time, timezone);
   if (!dt) return null;
@@ -126,6 +126,18 @@ export function computeScheduledAt(
   }
 
   if (reminderType === "one_time" && dt.getTime() <= Date.now()) {
+    // If the date was not explicitly set or was today, roll over to tomorrow
+    if (!filled.date || filled.date === todayInTimeZone(timezone)) {
+      const parts = getZonedParts(new Date(), timezone);
+      const tomorrow = new Date(Date.UTC(parts.year, parts.month - 1, parts.day + 1));
+      const pad2 = (n: number) => String(n).padStart(2, "0");
+      const nextDate = `${tomorrow.getUTCFullYear()}-${pad2(tomorrow.getUTCMonth() + 1)}-${pad2(tomorrow.getUTCDate())}`;
+      const nextDt = zonedWallTimeToUtc(nextDate, time, timezone);
+      if (nextDt && nextDt.getTime() > Date.now()) {
+        reminder.date = nextDate;
+        return nextDt;
+      }
+    }
     return null;
   }
 
